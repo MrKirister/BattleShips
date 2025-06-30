@@ -73,14 +73,20 @@ Qt::ItemFlags PlayersListModel::flags(const QModelIndex &index) const
 void PlayersListModel::userJoined(const QString &username, const QString &uid)
 {
     beginResetModel();
-    QSettings settings;
-    Player a;
-    a.name = username;
-    a.status = Player::Status::online;
-    a.uid = uid;
-    QVariantMap users = settings.value("players").toMap();
-    a.totalPlayed = users[uid].toPoint().x() + users[uid].toPoint().y();
-    players.push_back(a);
+    auto it = std::find_if(players.begin(), players.end(), [uid](const Player &player){
+        return player.uid == uid;
+    });
+    if(it != players.end()) (*it).status = Player::Status::online;
+    else {
+        QSettings settings;
+        Player a;
+        a.name = username;
+        a.status = Player::Status::online;
+        a.uid = uid;
+        QVariantMap users = settings.value("players").toMap();
+        a.totalPlayed = users[uid].toPoint().x() + users[uid].toPoint().y();
+        players.push_back(a);
+    }
     emit usersChanged(username, true);
     endResetModel();
 }
@@ -97,7 +103,8 @@ void PlayersListModel::userLeft(const QString &username, const QString &uid)
 }
 
 void PlayersListModel::updatePlayers(const QStringList &list)
-{   beginResetModel();
+{
+    beginResetModel();
     players.clear();
     QSettings settings;
     QVariantMap users = settings.value("players").toMap();

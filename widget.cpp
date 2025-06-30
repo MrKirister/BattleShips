@@ -24,12 +24,12 @@ Widget::Widget(QWidget *parent)
     this->setFixedSize({1920, 1080});
     initWidgets();
     client = new Client(this);
-    auto connectLambda = [this](){
+
+    connect(client, &Client::connected, this, [this]() {
         client->login(username, uid);
-    };
-    connect(client, &Client::connected, this, connectLambda);
+    });
     connect(client, &Client::loggedIn, this, &Widget::showSecondScreen);
-    connect(client, &Client::loginError, this, [this, connectLambda](const QString &reason){
+    connect(client, &Client::loginError, this, [this](const QString &reason){
         infoLabel->setText("Username is already in use");
         infoLabel->setStyleSheet({"color: red"});
         connectButton->setEnabled(true);
@@ -38,11 +38,11 @@ Widget::Widget(QWidget *parent)
     //connect(&client, &Client::messageReceived, this, &ChatWindow::messageReceived); - 2. Это для сообщений а у нас уэе обрабатывается newmove
     connect(client, &Client::disconnected, this, [this](){
         QMessageBox::warning(this, tr("Disconnected"), tr("The host terminated the connection"));
-    });//&ChatWindow::disconnectedFromServer
+    });
 
     connect(client, &Client::error, this, [this](const QString& error){
         QMessageBox::critical(this, QStringLiteral("Error"), error);
-    });//&ChatWindow::error
+    });
     connect(client, &Client::userJoined, this, [this](const QString &username, const QString &uid){
         playersModel->userJoined(username, uid);
     });
@@ -67,13 +67,13 @@ Widget::Widget(QWidget *parent)
         if(q.exec()){
             if(q.clickedButton() == a) {
                 showThirdScreen(); //TODO: написать функцию(все готово в предыдущей)
-                client->acceptGame(uid, this->username, this->uid);
+                client->acceptGame(uid);
                 rivalName = username;
                 rivalUid = uid;
                 qDebug() << "rival name : " << rivalName;
             }
             else {
-                client->declineGame(uid, this->username, this->uid);
+                client->declineGame(uid);
                 rivalName.clear();
                 rivalUid.clear();
             }
@@ -130,11 +130,9 @@ void Widget::initWidgets()
         }
         settings.setValue("username", username);
 
-        client->connectToServer(QHostAddress("5.61.37.57"), 1967);
-        //TODO: Проверить повторяется ли username
-        //TODO: Переместить вызов в прием сигнала от клиента(сервера)
+        // client->connectToServer(QHostAddress("5.61.37.57"), 1967);
+        client->connectToServer(QHostAddress("127.0.0.1"), 1967);
         connectButton->setEnabled(false);
-
     });
 
     QSettings settings;
@@ -190,8 +188,7 @@ void Widget::initWidgets()
         if(model->hasSelection()){
             auto row = model->selectedIndexes()[0].row();
             auto uid = playersModel->getUid(row);
-            qDebug() << uid;
-            client->invite(uid, username, this->uid);
+            client->invite(uid);
         }
     });
 
