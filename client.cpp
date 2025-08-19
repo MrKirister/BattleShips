@@ -3,8 +3,6 @@
 #include <QTcpSocket>
 #include <QDataStream>
 
-
-
 #include <QJsonParseError>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -13,63 +11,70 @@
 
 Client::Client(QObject *parent)
     : QObject(parent)
-    , m_clientSocket(this)
-    , m_reader(&m_clientSocket)
-    , m_writer(&m_clientSocket)
+    , m_socket(this)
+    , m_reader(&m_socket)
+    , m_writer(&m_socket)
 {
-    connect(&m_clientSocket, &QTcpSocket::connected, this, [this](){
-        if (!m_clientSocket.isOpen()) {
-            // qDebug() << "Error: socket is not open";
+    connect(&m_socket, &QTcpSocket::connected, this, [this](){
+        if (!m_socket.isOpen()) {
+            qDebug() << "Error: socket is not open";
         }
         if (!m_writer.device()) {
-            // qDebug() << "No writer device set";
-            m_writer.setDevice(&m_clientSocket);
+            qDebug() << "No writer device set";
+            m_writer.setDevice(&m_socket);
         }
         if (!m_reader.device()) {
-            // qDebug() << "No reader device set";
-            m_reader.setDevice(&m_clientSocket);
+            qDebug() << "No reader device set";
+            m_reader.setDevice(&m_socket);
         }
 
         emit connected();
     });
-    connect(&m_clientSocket, &QTcpSocket::disconnected, this, &Client::disconnected);
-    connect(&m_clientSocket, &QTcpSocket::readyRead, this, &Client::onReadyRead);
+    connect(this, &Client::dataReceived, this, &Client::parseData);
+    connect(&m_socket, &QTcpSocket::disconnected, this, &Client::disconnected);
+    connect(&m_socket, &QTcpSocket::readyRead, this, &Client::onReadyRead);
 #if (QT_VERSION < QT_VERSION_CHECK(5, 15, 0))
     connect(m_clientSocket, QOverload<QAbstractSocket::SocketError>::of(&QAbstractSocket::error), this, &ChatClient::error);
 #else
-    connect(&m_clientSocket, &QAbstractSocket::errorOccurred, this, &Client::onError);
+    connect(&m_socket, &QAbstractSocket::errorOccurred, this, &Client::onError);
 #endif
-    connect(&m_clientSocket, &QTcpSocket::disconnected, this, [this](){m_started = false;});
+    connect(&m_socket, &QTcpSocket::disconnected, this, [this](){m_started = false;});
 }
 
 Client::~Client()
 {
-    if (m_writeOpened && m_clientSocket.state() != QAbstractSocket::UnconnectedState) {
+    if (m_writeOpened && m_socket.state() != QAbstractSocket::UnconnectedState) {
         m_writer.endArray();
-        m_clientSocket.waitForBytesWritten(2000);
+        m_socket.waitForBytesWritten(2000);
     }
 }
 
 void Client::disconnectFromHost()
 {
-    m_clientSocket.disconnectFromHost();
+    m_writer.endArray();
+    m_socket.waitForBytesWritten(2000);
+    m_socket.disconnectFromHost();
+    m_writeOpened = false;
 }
 
 void Client::sendData()
 {
-    // qDebug() << "Sending" << m_args;
+    qDebug() << "Sending" << m_args;
 
     if (m_args.isEmpty()) return;
     if (!m_writeOpened) {
-        // qDebug() << "starting the main array";
+        qDebug() << "starting the main array";
         m_writer.startArray();
         m_writeOpened = true;
     }
 
-    if (m_clientSocket.state() == QAbstractSocket::ConnectedState) {
+    if (m_socket.state() == QAbstractSocket::ConnectedState) {
+        qDebug() << "Connected to socket. Starting sending data";
         m_writer.startMap(m_args.size());
+        qDebug() << "started map with data";
         for (auto i = m_args.cbegin(); i!=m_args.cend(); ++i) {
             m_writer.append(i.key());
+            qDebug() << "appended key" << i.key();
             switch (i.value().type()) {
                 case QVariant::Bool: m_writer.append(i.value().toBool()); break;
                 case QVariant::Int: m_writer.append(i.value().toInt()); break;
@@ -111,10 +116,12 @@ void Client::sendData()
                 default:
                     break;
             }
+            qDebug() << "appended value"<<i.value();
         }
         m_writer.endMap();
+        qDebug() << "closed map with m_args";
     }
-    // else qDebug() << "no connection to server";
+    else qDebug() << "no connection to server";
 }
 
 void Client::login(const QString &userName, const QString &uid)
@@ -204,7 +211,7 @@ void Client::cellChecked(int val, const QString &uid, int row, int col)
     sendData();
 }
 
-void Client::dataReceived(const DataList &data)
+void Client::parseData(const DataList &data)
 {
     const auto type = data.value(DataType).toString();
     if (type == QLatin1String("login")) {
@@ -287,12 +294,14 @@ void Client::dataReceived(const DataList &data)
 
 void Client::connectToServer(const QHostAddress &address, quint16 port)
 {
-    m_clientSocket.connectToHost(address, port);
+    qDebug() << "Connecting socket to server...";
+    m_socket.connectToHost(address, port);
 }
 
 void Client::onReadyRead()
 {
     m_reader.reparse();
+    qDebug() << "last reader error:"<<m_reader.lastError().toString();
 
     // Протокол:
     // [
@@ -302,45 +311,46 @@ void Client::onReadyRead()
 
     while (m_reader.lastError() == QCborError::NoError) {
         if (!m_started) {
-            // qDebug() << "not started yet";
+            qDebug() << "not started yet";
             if (!m_reader.isArray()) {
-                // qDebug() << "Error: must be an array";
+                qDebug() << "Error: must be an array";
                 break; // protocol error
             }
-            // qDebug() << "entering the main array";
+            qDebug() << "entering the main array";
             m_reader.enterContainer();
             m_started = true;
         }
         else if (m_reader.containerDepth() == 1) {
-            // qDebug() << "we are at depth 1";
+            qDebug() << "we are at depth 1";
             if (!m_reader.hasNext()) {
-                // qDebug() << "nothing to read, disconnecting...";
+                qDebug() << "nothing to read, disconnecting...";
                 m_reader.leaveContainer();
-                disconnectFromHost();
+                // disconnectFromHost();
                 return;
             }
 
             if (!m_reader.isMap() || !m_reader.isLengthKnown()) {
-                // qDebug() << "Error: must be a map";
+                qDebug() << "Error: must be a map";
                 break; // protocol error
             }
-            // qDebug() << "we are at a map. Receiving message";
+            qDebug() << "we are at a map. Receiving message";
             m_leftToRead = m_reader.length();
+            qDebug() << "message size is"<<m_leftToRead;
             m_reader.enterContainer();
             m_receivedData.clear();
         }
         else if (m_lastMessageType == Unknown) {
-            // qDebug() << "reading message type";
+            qDebug() << "reading message type";
             if (!m_reader.isInteger()) {
-                // qDebug() << "Error: message type must be an integer";
+                qDebug() << "Error: message type must be an integer";
                 break; // protocol error
             }
             m_lastMessageType = Type(m_reader.toInteger());
-            // qDebug() << "message type"<<m_lastMessageType;
+            qDebug() << "message type"<<m_lastMessageType;
             m_reader.next();
         }
         else {
-            // qDebug() << "reading payload";
+            qDebug() << "reading payload";
             switch (m_reader.type()) {
                 case QCborStreamReader::UnsignedInteger:
                 case QCborStreamReader::NegativeInteger: {
@@ -382,19 +392,20 @@ void Client::onReadyRead()
                 }
             }
             m_leftToRead--;
-            // qDebug() << "read so far:"<<m_receivedData;
-            // qDebug() << "left to read:"<<m_leftToRead;
+            qDebug() << "read so far:"<<m_receivedData;
+            qDebug() << "left to read:"<<m_leftToRead;
 
             if (m_leftToRead == 0) {
                 m_reader.leaveContainer();
-                dataReceived(m_receivedData);
+                qDebug() << "The total message data:"<<m_receivedData;
+                emit dataReceived(m_receivedData);
             }
             m_lastMessageType = Unknown;
         }
     }
 
     if (m_reader.lastError() != QCborError::NoError) {
-        qDebug() << QLatin1String("Invalid message:") << m_reader.lastError().toString();
+        qDebug() << "Invalid message:" << m_reader.lastError().toString();
     }
 }
 

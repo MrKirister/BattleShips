@@ -20,6 +20,8 @@ class Widget : public QWidget
 public:
     Widget(QWidget *parent = nullptr);
     ~Widget();
+private slots:
+    void loginToServer();
 private:
     Field* myBoard;
     Field* rivalBoard;

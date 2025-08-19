@@ -28,17 +28,24 @@ Widget::Widget(QWidget *parent)
     : QWidget(parent)
 {
     this->setFixedSize({1920, 1080});
-    initWidgets();
     client = new Client(this);
+    initWidgets();
+
+    // соединяемся с сервером. Если успешно, client посылает сигнал connected
+    //client->connectToServer(QHostAddress("5.61.37.57"), SERVER_PORT);
+    infoLabel->setText("Connecting to server...");
+    infoLabel->setStyleSheet({"color: gray"});
+    client->connectToServer(QHostAddress("127.0.0.1"), SERVER_PORT);
+
     connect(client, &Client::connected, this, [this]() {
-        client->login(username, uid);
+        infoLabel->setText("Connected to server");
+        infoLabel->setStyleSheet({"color: green"});
     });
     connect(client, &Client::loggedIn, this, &Widget::showSecondScreen);
     connect(client, &Client::loginError, this, [this](const QString &reason){
-        infoLabel->setText("Username is already in use");
+        infoLabel->setText(reason);
         infoLabel->setStyleSheet({"color: red"});
         connectButton->setEnabled(true);
-        client->disconnectFromHost();
     });
 
     //connect(&client, &Client::messageReceived, this, &ChatWindow::messageReceived); - 2. Это для сообщений а у нас уэе обрабатывается newmove
@@ -150,6 +157,29 @@ Widget::Widget(QWidget *parent)
 
 Widget::~Widget() {}
 
+void Widget::loginToServer() // SLOT
+{
+    username = usernameEdit->text().simplified();
+    if(username.isEmpty()) {
+        infoLabel->setText("Username is empty");
+        infoLabel->setStyleSheet({"color: red"});
+        return;
+    }
+
+    connectButton->setEnabled(false);
+
+    QSettings settings;
+    // if(settings.contains("uid")) uid = settings.value("uid").toString();
+    // else {
+    //     uid = QUuid::createUuid().toString();
+    //     settings.setValue("uid", uid);
+    // }
+    settings.setValue("username", username);
+    uid = QUuid::createUuid().toString();
+
+    client->login(username, uid);
+}
+
 void Widget::initWidgets()
 {
     titleLabel = new QLabel("𝓑𝓪𝓽𝓽𝓵𝓮𝓢𝓱𝓲𝓹𝓼", this);
@@ -168,26 +198,7 @@ void Widget::initWidgets()
     auto buttonRect = buttonMetrics.boundingRect(connectButton->text());
     connectButton->resize({buttonRect.width() + 25, buttonRect.height()});
     connectButton->setGeometry(connectButton->rect().translated(1920/2 - connectButton->rect().width() / 2, 450));
-    connect(connectButton, &QPushButton::clicked, this, [this](){
-        username = usernameEdit->text().simplified();
-        if(username.isEmpty()) {
-            infoLabel->setText("Username is empty");
-            infoLabel->setStyleSheet({"color: red"});
-            return;
-        }
-
-        QSettings settings;
-        // if(settings.contains("uid")) uid = settings.value("uid").toString();
-        // else {
-        //     uid = QUuid::createUuid().toString();
-        //     settings.setValue("uid", uid);
-        // }
-        settings.setValue("username", username);
-        uid = QUuid::createUuid().toString();
-        //client->connectToServer(QHostAddress("5.61.37.57"), SERVER_PORT);
-        client->connectToServer(QHostAddress("127.0.0.1"), SERVER_PORT);
-        connectButton->setEnabled(false);
-    });
+    connect(connectButton, &QPushButton::clicked, this, &Widget::loginToServer);
 
     QSettings settings;
 

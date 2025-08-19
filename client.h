@@ -54,18 +54,19 @@ signals:
     void cellCheckedResult(int val, int row, int col);
     //void newGame(const QVector<Cell> &data, int size, int colorCount);
     //void newMove(const QVector<QPair<int, int>> &captured, int player);
+    void dataReceived(const QMap<int, QVariant> &data);
 private:
-    QTcpSocket m_clientSocket;
+    QTcpSocket m_socket;
     QCborStreamReader m_reader;
     QCborStreamWriter m_writer;
     bool m_started {false};
     bool m_writeOpened{false};
-    DataList m_args;
+    QMap<int, QVariant> m_args;
     Type m_lastMessageType {Type::Unknown};
-    DataList m_receivedData;
+    QMap<int, QVariant> m_receivedData;
     int m_leftToRead{0};
 
-    void dataReceived(const DataList &doc);
+    void parseData(const QMap<int, QVariant> &doc);
     void sendData();
 
     QByteArray handleByteArray();
