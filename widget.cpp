@@ -1,7 +1,9 @@
 #include "widget.h"
 #include "chat.h"
+#include "field.h"
 #include "playerslistmodel.h"
 #include "client.h"
+#include "ship.h"
 #include <QSequentialAnimationGroup>
 #include <QLabel>
 #include <QPushButton>
@@ -16,7 +18,11 @@
 #include <QGridLayout>
 #include <QListView>
 #include <QUuid>
+#include <QTimer>
+#include <QRandomGenerator>
+#include <QJsonArray>
 
+#include "enums.h"
 
 Widget::Widget(QWidget *parent)
     : QWidget(parent)
@@ -24,7 +30,6 @@ Widget::Widget(QWidget *parent)
     this->setFixedSize({1920, 1080});
     initWidgets();
     client = new Client(this);
-
     connect(client, &Client::connected, this, [this]() {
         client->login(username, uid);
     });
@@ -35,6 +40,7 @@ Widget::Widget(QWidget *parent)
         connectButton->setEnabled(true);
         client->disconnectFromHost();
     });
+
     //connect(&client, &Client::messageReceived, this, &ChatWindow::messageReceived); - 2. Это для сообщений а у нас уэе обрабатывается newmove
     connect(client, &Client::disconnected, this, [this](){
         QMessageBox::warning(this, tr("Disconnected"), tr("The host terminated the connection"));
@@ -52,7 +58,7 @@ Widget::Widget(QWidget *parent)
     connect(client, &Client::userList, this, [this](const QStringList &list){
         playersModel->updatePlayers(list);
     });
-    connect(playersModel, &PlayersListModel::usersChanged, chatModel, [this](const QString &username, bool joined){
+    connect(playersModel, &PlayersListModel::usersChanged, this, [this](const QString &username, bool joined){
         if(joined){
             chatModel->newMessage(QString("%1 joined").arg(username));
         }
@@ -64,19 +70,19 @@ Widget::Widget(QWidget *parent)
         q.addButton("Decline", QMessageBox::RejectRole);
         q.setText(QString("%1 wants to play").arg(username));
         q.setWindowTitle("Invitation");
-        if(q.exec()){
-            if(q.clickedButton() == a) {
-                showThirdScreen(); //TODO: написать функцию(все готово в предыдущей)
-                client->acceptGame(uid);
-                rivalName = username;
-                rivalUid = uid;
-                qDebug() << "rival name : " << rivalName;
-            }
-            else {
-                client->declineGame(uid);
-                rivalName.clear();
-                rivalUid.clear();
-            }
+        q.exec();
+        if(q.clickedButton() == a) {
+            rivalName = username;
+            rivalUid = uid;
+            rivalStatus->setText(QString("%1 is not ready").arg(rivalName));
+            rivalStatus->setStyleSheet("color: red");
+            showThirdScreen();
+            client->acceptGame(uid);
+        }
+        else {
+            client->declineGame(uid);
+            rivalName.clear();
+            rivalUid.clear();
         }
     });
     connect(client, &Client::gameDeclined, this, [this](const QString &username, const QString &uid){
@@ -86,17 +92,66 @@ Widget::Widget(QWidget *parent)
     });
     connect(client, &Client::gameAccepted, this, [this](const QString &username, const QString &uid){
         rivalName = username;
-        qDebug() << "rival name : " << rivalName;
         rivalUid = uid;
+        rivalStatus->setText(QString("%1 is not ready").arg(rivalName));
+        rivalStatus->setStyleSheet("color: red");
+        // myStatus->setText("You are not ready");
+        // myStatus->setStyleSheet("color: red");
         showThirdScreen();
+        invitor = true;
     });
+    connect(client, &Client::playerReady, this, [this](bool rivalState, const QString &uid){
+        if(rivalUid != uid) return;
+        rivalReady = rivalState;
+        if(rivalReady){
+            rivalStatus->setStyleSheet("color: green");
+            rivalStatus->setText(QString("%1 is ready").arg(rivalName));
+        }
+        else {
+            rivalStatus->setStyleSheet("color: red");
+            rivalStatus->setText(QString("%1 is not ready").arg(rivalName));
+        }
+        if(isReady && rivalReady){
+            showFourthScreen();
+            randomPlacement->setEnabled(false);
+            myStatus->setGeometry(rivalStatus->geometry());
+            myStatus->setText(username);
+            myStatus->setStyleSheet("color : #7e8d94");
+            rivalStatus->setFont(myStatus->font());
+            rivalStatus->setGeometry(rivalBoard->geometry().left(),
+                                     rivalStatus->geometry().y(), rivalBoard->geometry().width(), rivalStatus->geometry().height());
+            rivalStatus->setText(rivalName);
+            rivalStatus->setStyleSheet("color : #7e8d94");
+            rivalStatus->setAlignment(Qt::AlignRight);
+            ready->setEnabled(false);
+            myBoard->hideDisabledRect();
+        }
+    });
+    connect(myBoard, &Field::shipsPlaced, ready, &QPushButton::setEnabled);
+    connect(client, &Client::gameStarted, this, [this](bool invitorFirst){
+        meFirst = !invitorFirst;
+        rivalBoard->setEnabled(meFirst);
+        ready->setDisabled(true);
+        // if(meFirst) myStatus->setText("Your turn");
+        // else myStatus->setText(QString("%1's turn").arg(rivalName));
+
+        if(meFirst) gameStatus->setText("Your turn");
+        else gameStatus->setText(QString("%1's turn").arg(rivalName));
+    });
+    connect(rivalBoard, &Field::checkRivalCell, this, [this](int row, int col){
+        client->checkRivalCell(row, col, rivalUid);
+    });
+    connect(client, &Client::checkMyCell, myBoard, &Field::checkMyCell);
+    connect(myBoard, &Field::hit, client, [this](int val, int row, int col){
+        client->cellChecked(val, rivalUid, row, col);
+    });
+    connect(client, &Client::cellCheckedResult, rivalBoard, &Field::showHit);
 }
 
 Widget::~Widget() {}
 
 void Widget::initWidgets()
 {
-
     titleLabel = new QLabel("𝓑𝓪𝓽𝓽𝓵𝓮𝓢𝓱𝓲𝓹𝓼", this);
     auto f = titleLabel->font();
     f.setPointSize(120);
@@ -114,7 +169,6 @@ void Widget::initWidgets()
     connectButton->resize({buttonRect.width() + 25, buttonRect.height()});
     connectButton->setGeometry(connectButton->rect().translated(1920/2 - connectButton->rect().width() / 2, 450));
     connect(connectButton, &QPushButton::clicked, this, [this](){
-
         username = usernameEdit->text().simplified();
         if(username.isEmpty()) {
             infoLabel->setText("Username is empty");
@@ -123,15 +177,15 @@ void Widget::initWidgets()
         }
 
         QSettings settings;
-        if(settings.contains("uid")) uid = settings.value("uid").toString();
-        else {
-            uid = QUuid::createUuid().toString();
-            settings.setValue("uid", uid);
-        }
+        // if(settings.contains("uid")) uid = settings.value("uid").toString();
+        // else {
+        //     uid = QUuid::createUuid().toString();
+        //     settings.setValue("uid", uid);
+        // }
         settings.setValue("username", username);
-
-        // client->connectToServer(QHostAddress("5.61.37.57"), 1967);
-        client->connectToServer(QHostAddress("127.0.0.1"), 1967);
+        uid = QUuid::createUuid().toString();
+        //client->connectToServer(QHostAddress("5.61.37.57"), SERVER_PORT);
+        client->connectToServer(QHostAddress("127.0.0.1"), SERVER_PORT);
         connectButton->setEnabled(false);
     });
 
@@ -205,13 +259,89 @@ void Widget::initWidgets()
     l->addWidget(chatView);
     chat->setLayout(l);
 
-    Mfield = new QWidget(this);
-    Mfield->setGeometry(25, -800, 700, 700);
-    Mfield->setStyleSheet("border : 2px solid white; border-radius: 10%; background-color: #250018");
+    myBoard = new Field(true, this);
+    myBoard->setGeometry(25, -1800, 700+myBoard->paletteWidth+4, 700+4);
+    myBoard->setStyleSheet("border : 2px solid #7C7B6F; border-radius: 5%; background-color: #e3F3E3");
+    myBoard->createShips();
+    myBoard->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    myBoard->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    Mfield2 = new QWidget(this);
-    Mfield2->setGeometry(750, 2200, 700, 700);
-    Mfield2->setStyleSheet("border : 2px solid white; border-radius: 10%; background-color: #250018");
+    rivalBoard = new Field(false, this);
+    rivalBoard->setGeometry(750, 2200, 700+4, 700+4);
+    rivalBoard->setStyleSheet("border : 2px solid #7C7B6F; border-radius: 5%; background-color: #518487");
+
+    ready = new QPushButton(this);
+    ready->setGeometry(-130, 920, 100, 50);
+    ready->setText("ready");
+    f.setPixelSize(24);
+    ready->setFont(f);
+    ready->setEnabled(false);
+    connect(ready, &QPushButton::clicked, this, [this](){
+        isReady = !isReady;
+        isReady ? ready->setText("not ready") : ready->setText("ready");
+        client->readyPressed(isReady, rivalUid);
+        myBoard->disableField(isReady);
+        if(isReady){
+            myStatus->show();
+        }
+        else {
+            myStatus->hide();
+        }
+        if(isReady && rivalReady){
+            showFourthScreen();
+
+            randomPlacement->setEnabled(false);
+            myStatus->setGeometry(rivalStatus->geometry());
+            myStatus->setText(username);
+            myStatus->setStyleSheet("color : #7e8d94");
+            rivalStatus->setFont(myStatus->font());
+            rivalStatus->setGeometry(rivalBoard->geometry().left(),
+                                     rivalStatus->geometry().top(),
+                                     rivalBoard->geometry().width(),
+                                     rivalStatus->geometry().height());
+            rivalStatus->setText(rivalName);
+            rivalStatus->setStyleSheet("color : #7e8d94");
+            rivalStatus->setAlignment(Qt::AlignRight);
+            ready->setEnabled(false);
+            myBoard->hideDisabledRect();
+
+            if(invitor) {
+                meFirst = QRandomGenerator::global()->bounded(0, 2);
+                client->startGame(meFirst, rivalUid);
+                rivalBoard->setEnabled(meFirst);
+
+                if (meFirst) gameStatus->setText("Your turn");
+                else gameStatus->setText(QString("%1's turn").arg(rivalName));
+            }
+        }
+    });
+
+    myStatus = new QLabel(this);
+    myStatus->setGeometry(150, 500, 500, 100);
+    myStatus->setStyleSheet("color: green ");
+    myStatus->setText("You are ready");
+    myStatus->hide();
+    f = myStatus->font();
+    f.setPointSize(48);
+    myStatus->setFont(f);
+
+    rivalStatus = new QLabel(this);
+    rivalStatus->setGeometry(25, -150, 1000, 100);
+    rivalStatus->setFont(f);
+
+    randomPlacement = new QPushButton("random", this);
+    f.setPixelSize(24);
+    randomPlacement->setFont(f);
+    randomPlacement->setGeometry(-130, 920, 130, 50);
+    connect(randomPlacement, &QPushButton::clicked, myBoard, &Field::placeRandomly);
+
+    gameStatus = new QLabel("Your turn", this);
+    gameStatus->setGeometry(0, -200, 1600 , 100);
+    gameStatus->setAlignment(Qt::AlignCenter);
+    gameStatus->setStyleSheet(" color : #00A2E8");
+    f = gameStatus->font();
+    f.setPointSize(48);
+    gameStatus->setFont(f);
 }
 
 void Widget::showSecondScreen()
@@ -302,6 +432,8 @@ void Widget::showSecondScreen()
     allAnimations->start(QAbstractAnimation::DeleteWhenStopped);
     //TODO: если что это тест
     chatModel->newMessage(QString("%1 : Hello everyone!").arg(username));
+
+
 }
 
 void Widget::showThirdScreen()
@@ -310,22 +442,39 @@ void Widget::showThirdScreen()
 
     auto animationGroup1 = new QParallelAnimationGroup(this);
 
-    auto f1 = Mfield->geometry().topLeft();
-    auto fA = new QPropertyAnimation(Mfield, "pos", this);
+    auto f1 = myBoard->geometry().topLeft();
+    auto fA = new QPropertyAnimation(myBoard, "pos", this);
     fA->setStartValue(f1);
-    fA->setEndValue(f1 + QPoint(0, 1000));
+    fA->setEndValue(f1 + QPoint(0, 2000));
     fA->setDuration(1000);
     fA->setEasingCurve(QEasingCurve::OutQuad);
 
-    auto f2 = Mfield2->geometry().topLeft();
-    auto fA2 = new QPropertyAnimation(Mfield2, "pos", this);
-    fA2->setStartValue(f2);
-    fA2->setEndValue(f2 + QPoint(0, -2000));
-    fA2->setDuration(1000);
-    fA2->setEasingCurve(QEasingCurve::OutQuad);
+    auto readyP = ready->geometry().topLeft();
+    auto readyA = new QPropertyAnimation(ready, "pos", this);
+    readyA->setStartValue(readyP);
+    readyA->setEndValue(readyP + QPoint(180, 0));
+    readyA->setDuration(1000);
+    readyA->setEasingCurve(QEasingCurve::OutQuad);
+
+    auto randomP = randomPlacement->geometry().topLeft();
+    auto randomA = new QPropertyAnimation(randomPlacement, "pos", this);
+    randomA->setStartValue(randomP);
+    randomA->setEndValue(randomP + QPoint(300, 0));
+    randomA->setDuration(1000);
+    randomA->setEasingCurve(QEasingCurve::OutQuad);
+
+
+    auto rsPos = rivalStatus->geometry().topLeft();
+    auto rsAnimation = new QPropertyAnimation(rivalStatus, "pos", this);
+    rsAnimation->setStartValue(rsPos);
+    rsAnimation->setEndValue(rsPos + QPoint(0, 250));
+    rsAnimation->setDuration(1000);
+    rsAnimation->setEasingCurve(QEasingCurve::OutQuad);
 
     animationGroup1->addAnimation(fA);
-    animationGroup1->addAnimation(fA2);
+    animationGroup1->addAnimation(readyA);
+    animationGroup1->addAnimation(randomA);
+    animationGroup1->addAnimation(rsAnimation);
 
     auto animationGroup2 = new QParallelAnimationGroup(this);
 
@@ -357,4 +506,32 @@ void Widget::showThirdScreen()
     allAnimations->addAnimation(animationGroup2);
     allAnimations->addAnimation(animationGroup1);
     allAnimations->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void Widget::showFourthScreen()
+{
+    auto r = myBoard->geometry();
+    auto a = new QPropertyAnimation(myBoard, "geometry", this);
+    a->setStartValue(r);
+    a->setEndValue(QRect(r.topLeft().x(), r.topLeft().y() ,r.width() - myBoard->cellSize*4-myBoard->cellMargin*3 - myBoard->fieldMargin*2 - 2, r.height()));
+    a->setDuration(1200);
+    //a->setEasingCurve()
+    a->start(QAbstractAnimation::DeleteWhenStopped);
+    myBoard->hidePalette();
+
+    auto f2 = rivalBoard->geometry().topLeft();
+    auto fA2 = new QPropertyAnimation(rivalBoard, "pos", this);
+    fA2->setStartValue(f2);
+    fA2->setEndValue(f2 + QPoint(0, -2000));
+    fA2->setDuration(1000);
+    fA2->setEasingCurve(QEasingCurve::OutQuad);
+    fA2->start(QAbstractAnimation::DeleteWhenStopped);
+
+    auto gs = new QPropertyAnimation(gameStatus, "pos", this);
+    auto gsPos = gameStatus->geometry().topLeft();
+    gs->setStartValue(gsPos);
+    gs->setEndValue(gsPos + QPoint(0, 300));
+    gs->setDuration(1000);
+    gs->setEasingCurve(QEasingCurve::OutQuad);
+    gs->start(QAbstractAnimation::DeleteWhenStopped);
 }

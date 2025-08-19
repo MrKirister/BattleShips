@@ -3,8 +3,6 @@
 #include <QColor>
 #include <QSettings>
 
-//TODO: изменить файл тогда когда появится сервер
-
 PlayersListModel::PlayersListModel(QObject *parent)
     : QAbstractTableModel{parent}
 {

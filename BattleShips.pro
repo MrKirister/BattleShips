@@ -22,6 +22,7 @@ SOURCES += \
 HEADERS += \
     chat.h \
     client.h \
+    enums.h \
     field.h \
     player.h \
     playerfilter.h \

@@ -2,6 +2,9 @@
 
 #include <QTcpSocket>
 #include <QDataStream>
+
+
+
 #include <QJsonParseError>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -10,178 +13,271 @@
 
 Client::Client(QObject *parent)
     : QObject(parent)
-    , m_clientSocket(new QTcpSocket(this))
-    , m_loggedIn(false)
+    , m_clientSocket(this)
+    , m_reader(&m_clientSocket)
+    , m_writer(&m_clientSocket)
 {
-    timer.setInterval(500);
-    connect(&timer, &QTimer::timeout, this, &Client::sendData);
-    // Forward the connected and disconnected signals
+    connect(&m_clientSocket, &QTcpSocket::connected, this, [this](){
+        if (!m_clientSocket.isOpen()) {
+            // qDebug() << "Error: socket is not open";
+        }
+        if (!m_writer.device()) {
+            // qDebug() << "No writer device set";
+            m_writer.setDevice(&m_clientSocket);
+        }
+        if (!m_reader.device()) {
+            // qDebug() << "No reader device set";
+            m_reader.setDevice(&m_clientSocket);
+        }
 
-    connect(m_clientSocket, &QTcpSocket::connected, this, &Client::connected);
-    connect(m_clientSocket, &QTcpSocket::disconnected, this, &Client::disconnected);
-    connect(m_clientSocket, &QTcpSocket::readyRead, this, &Client::onReadyRead);
+        emit connected();
+    });
+    connect(&m_clientSocket, &QTcpSocket::disconnected, this, &Client::disconnected);
+    connect(&m_clientSocket, &QTcpSocket::readyRead, this, &Client::onReadyRead);
 #if (QT_VERSION < QT_VERSION_CHECK(5, 15, 0))
     connect(m_clientSocket, QOverload<QAbstractSocket::SocketError>::of(&QAbstractSocket::error), this, &ChatClient::error);
 #else
-    connect(m_clientSocket, &QAbstractSocket::errorOccurred, this, &Client::onError);
+    connect(&m_clientSocket, &QAbstractSocket::errorOccurred, this, &Client::onError);
 #endif
-    connect(m_clientSocket, &QTcpSocket::disconnected, this, [this]()->void{m_loggedIn = false;});
+    connect(&m_clientSocket, &QTcpSocket::disconnected, this, [this](){m_started = false;});
+}
+
+Client::~Client()
+{
+    if (m_writeOpened && m_clientSocket.state() != QAbstractSocket::UnconnectedState) {
+        m_writer.endArray();
+        m_clientSocket.waitForBytesWritten(2000);
+    }
 }
 
 void Client::disconnectFromHost()
 {
-    m_clientSocket->disconnectFromHost();
-}
-
-void Client::sendToServer()
-{
-    if (args.isEmpty()) return; // сообщение не подготовлено
-
-    if (timer.isActive()) {
-        qDebug() << "Previous message was not received. Aborting the previous message";
-        timer.stop();
-    }
-
-    static int messageID = 0;
-    args[QLatin1String("messageID")] = messageID;
-    messageID++;
-
-    sendData();
+    m_clientSocket.disconnectFromHost();
 }
 
 void Client::sendData()
 {
-    if (m_clientSocket->state() == QAbstractSocket::ConnectedState) {
-        QDataStream clientStream(m_clientSocket);
-        clientStream.setVersion(QDataStream::Qt_5_7);
-        QJsonObject message;
-        for (auto i = args.cbegin(); i!=args.cend(); ++i) {
-            message[i.key()] = i.value();
-        }
-        clientStream << QJsonDocument(message).toJson(QJsonDocument::Compact);
+    // qDebug() << "Sending" << m_args;
+
+    if (m_args.isEmpty()) return;
+    if (!m_writeOpened) {
+        // qDebug() << "starting the main array";
+        m_writer.startArray();
+        m_writeOpened = true;
     }
-    else qDebug() << "no connection to server";
-    if (!timer.isActive()) timer.start();
+
+    if (m_clientSocket.state() == QAbstractSocket::ConnectedState) {
+        m_writer.startMap(m_args.size());
+        for (auto i = m_args.cbegin(); i!=m_args.cend(); ++i) {
+            m_writer.append(i.key());
+            switch (i.value().type()) {
+                case QVariant::Bool: m_writer.append(i.value().toBool()); break;
+                case QVariant::Int: m_writer.append(i.value().toInt()); break;
+                case QVariant::UInt: m_writer.append(i.value().toUInt()); break;
+                case QVariant::LongLong: m_writer.append(i.value().toLongLong()); break;
+                case QVariant::ULongLong: m_writer.append(i.value().toULongLong()); break;
+                case QVariant::Double: m_writer.append(i.value().toDouble()); break;
+                case QVariant::Char: m_writer.append(i.value().toString()); break;
+                case QVariant::Map: { // QMap<QString, QString>
+                    auto map = i.value().toMap();
+                    m_writer.startMap(map.size());
+                    for (auto j = map.cbegin(); j != map.cend(); ++j) {
+                        m_writer.append(j.key());
+                        m_writer.append(j.value().toString());
+                    }
+                    m_writer.endMap();
+                    break;
+                }
+                case QVariant::List: { // QList<QVariant>
+                    auto list = i.value().toList();
+                    m_writer.startArray(list.size());
+                    for (auto j = 0; j < list.size(); ++j) {
+                        m_writer.append(list.at(j).toString());
+                    }
+                    m_writer.endArray();
+                    break;
+                }
+                case QVariant::String: m_writer.append(i.value().toString()); break;
+                case QVariant::StringList: {
+                    auto list = i.value().toStringList();
+                    m_writer.startArray(list.size());
+                    for (auto j = 0; j < list.size(); ++j) {
+                        m_writer.append(list.at(j));
+                    }
+                    m_writer.endArray();
+                    break;
+                }
+                case QVariant::ByteArray: m_writer.append(i.value().toByteArray()); break;
+                default:
+                    break;
+            }
+        }
+        m_writer.endMap();
+    }
+    // else qDebug() << "no connection to server";
 }
 
 void Client::login(const QString &userName, const QString &uid)
 {
-    args.clear();
+    m_args.clear();
 
-    args.insert(QLatin1String("type"), QLatin1String("login"));
-    args.insert(QLatin1String("uid"), uid);
-    args.insert(QLatin1String("username"), userName);
+    m_args.insert(DataType, QLatin1String("login"));
+    m_args.insert(UserUid, uid);
+    m_args.insert(UserName, userName);
 
-    sendToServer();
+    sendData();
 }
 
 void Client::sendMessage(const QString &text)
 {
     if (text.isEmpty()) return;
 
-    args.clear();
+    m_args.clear();
 
-    args.insert(QLatin1String("type"), QLatin1String("message"));
-    args.insert(QLatin1String("text"), text);
-    args.insert(QLatin1String("receiver"), QLatin1String("all"));
+    m_args.insert(DataType, QLatin1String("message"));
+    m_args.insert(Text, text);
+    m_args.insert(ReceiverUid, QLatin1String("all"));
 
-    sendToServer();
+    sendData();
 }
 
 void Client::invite(const QString &uid)
 {
-    args.clear();
-    args.insert(QLatin1String("type"), QLatin1String("invite"));
-    args.insert(QLatin1String("receiver"), uid);
-    sendToServer();
+    m_args.clear();
+    m_args.insert(DataType, QLatin1String("invite"));
+    m_args.insert(ReceiverUid, uid);
+    sendData();
 }
 
 void Client::acceptGame(const QString &uid)
 {
-    args.clear();
-    args.insert(QLatin1String("type"), QLatin1String("accepted"));
-    args.insert(QLatin1String("receiver"), uid);
-    sendToServer();
+    m_args.clear();
+    m_args.insert(DataType, QLatin1String("accepted"));
+    m_args.insert(ReceiverUid, uid);
+    sendData();
 }
 
 void Client::declineGame(const QString &uid)
 {
-    args.clear();
-    args.insert(QLatin1String("type"), QLatin1String("declined"));
-    args.insert(QLatin1String("receiver"), uid);
-    sendToServer();
+    m_args.clear();
+    m_args.insert(DataType, QLatin1String("declined"));
+    m_args.insert(ReceiverUid, uid);
+    sendData();
 }
 
-void Client::jsonReceived(const QJsonObject &docObj)
+void Client::readyPressed(bool isReady, const QString &uid)
 {
-    qDebug() << docObj;
+    m_args.clear();
+    m_args.insert(DataType, QLatin1String("ready"));
+    m_args.insert(ReceiverUid, uid);
+    m_args.insert(Ready, isReady);
+    sendData();
+}
 
-    // Проверяем, не ответное ли это сообщение
-    const bool received = docObj.value(QLatin1String("received")).toBool();
-    if (received) {
-        timer.stop(); // останавливаем таймер, так как нам пришел ответ от
-                      // сервера, что сообщение получено
-        return;
-    }
+void Client::startGame(bool invitorFirst, const QString &uid)
+{
+    m_args.clear();
+    m_args.insert(DataType, QLatin1String("game"));
+    m_args.insert(ReceiverUid, uid);
+    m_args.insert(InvitorFirst, invitorFirst);
+    sendData();
+}
 
-    const auto type = docObj.value(QLatin1String("type")).toString();
-    if (type == QLatin1String("login") && !m_loggedIn) {
-        const QJsonValue resultVal = docObj.value(QLatin1String("success"));
-        if (resultVal.isNull() || !resultVal.isBool())
-            return;
-        const bool loginSuccess = resultVal.toBool();
-        if (loginSuccess) {
-            m_loggedIn = true;
+void Client::checkRivalCell(int row, int col, const QString &uid)
+{
+    m_args.clear();
+    m_args.insert(DataType, QLatin1String("move"));
+    m_args.insert(ReceiverUid, uid);
+    m_args.insert(Row, row);
+    m_args.insert(Column, col);
+    sendData();
+}
+
+void Client::cellChecked(int val, const QString &uid, int row, int col)
+{
+    m_args.clear();
+    m_args.insert(DataType, QLatin1String("cell"));
+    m_args.insert(ReceiverUid, uid);
+    m_args.insert(CellType, val);
+    m_args.insert(Row, row);
+    m_args.insert(Column, col);
+    sendData();
+}
+
+void Client::dataReceived(const DataList &data)
+{
+    const auto type = data.value(DataType).toString();
+    if (type == QLatin1String("login")) {
+        const auto resultVal = data.value(Success).toBool();
+        if (resultVal) {
             emit loggedIn();
         }
         else {
-            emit loginError(docObj.value(QLatin1String("reason")).toString());
+            emit loginError(data.value(Reason).toString());
         }
-        const auto users = docObj.value(QLatin1String("users")).toArray();
-        QStringList list;
-        std::transform(users.begin(), users.end(), std::back_inserter(list), [](QJsonValue a){
-            return a.toString();
-        });
-        emit userList(list);
+        const auto users = data.value(Users).toStringList();
+        emit userList(users);
     }
     else if (type == QLatin1String("message")) {
-        const auto textVal = docObj.value(QLatin1String("text")).toString();
-        const auto senderVal = docObj.value(QLatin1String("sender")).toString();
+        const auto textVal = data.value(Text).toString();
+        const auto senderVal = data.value(SenderName).toString();
         if (!textVal.isEmpty() && !senderVal.isEmpty())
             emit messageReceived(senderVal, textVal);
     }
     else if (type == QLatin1String("newuser")) { // A user joined the game
-        const auto username = docObj.value(QLatin1String("username")).toString();
-        const auto uid = docObj.value(QLatin1String("uid")).toString();
+        const auto username = data.value(UserName).toString();
+        const auto uid = data.value(UserUid).toString();
         if (!username.isEmpty() && !uid.isEmpty())
             emit userJoined(username, uid);
     }
     else if (type == QLatin1String("userdisconnected")) { // A user left the game
-        const auto username = docObj.value(QLatin1String("username")).toString();
-        const auto uid = docObj.value(QLatin1String("uid")).toString();
+        const auto username = data.value(UserName).toString();
+        const auto uid = data.value(UserUid).toString();
         if (!username.isEmpty() && !uid.isEmpty())
             emit userLeft(username, uid);
     }
     // An invite was received from sender
     else if (type == QLatin1String("invite")) {
-        const auto username = docObj.value(QLatin1String("sender")).toString();
-        const auto uid = docObj.value(QLatin1String("senderUid")).toString();
+        const auto username = data.value(SenderName).toString();
+        const auto uid = data.value(SenderUid).toString();
         if(!uid.isEmpty() && !username.isEmpty())
             emit invited(username, uid);
     }
     // Sender accepted out invite
     else if (type == QLatin1String("accepted")) {
-        const auto username = docObj.value(QLatin1String("sender")).toString();
-        const auto uid = docObj.value(QLatin1String("senderUid")).toString();
+        const auto username = data.value(SenderName).toString();
+        const auto uid = data.value(SenderUid).toString();
         if(!uid.isEmpty() && !username.isEmpty())
             emit gameAccepted(username, uid);
     }
     // Sender declined our invite
     else if (type == QLatin1String("declined")) {
-        const auto username = docObj.value(QLatin1String("sender")).toString();
-        const auto uid = docObj.value(QLatin1String("senderUid")).toString();
+        const auto username = data.value(SenderName).toString();
+        const auto uid = data.value(SenderUid).toString();
         if(!uid.isEmpty() && !username.isEmpty())
             emit gameDeclined(username, uid);
+    }
+    else if (type == QLatin1String("ready")) {
+        const auto ready = data.value(Ready).toBool();
+        const auto uid = data.value(SenderUid).toString();
+        if(!uid.isEmpty())
+            emit playerReady(ready, uid);
+        //playerReady - готовность противника
+    }
+    else if (type == QLatin1String("game")){
+        const auto invitorFirst = data.value(InvitorFirst).toBool();
+        emit gameStarted(invitorFirst);
+    }
+    else if (type == QLatin1String("move")){
+        const auto row = data.value(Row).toInt();
+        const auto col = data.value(Column).toInt();
+        emit checkMyCell(row, col);
+    }
+    else if (type == QLatin1String("cell")) {
+        const auto cellType = data.value(CellType).toInt();
+        const auto row = data.value(Row).toInt();
+        const auto col = data.value(Column).toInt();
+        emit cellCheckedResult(cellType, row, col);
     }
     else {
         qDebug() << "A message with unknown type:" << type << ", ignore";
@@ -191,29 +287,114 @@ void Client::jsonReceived(const QJsonObject &docObj)
 
 void Client::connectToServer(const QHostAddress &address, quint16 port)
 {
-    m_clientSocket->connectToHost(address, port);
+    m_clientSocket.connectToHost(address, port);
 }
 
 void Client::onReadyRead()
 {
-    QByteArray jsonData;
-    QDataStream socketStream(m_clientSocket);
-    socketStream.setVersion(QDataStream::Qt_5_7);
-    for (;;) {
-        socketStream.startTransaction();
-        socketStream >> jsonData;
-        if (socketStream.commitTransaction()) {
-            qDebug() << "full transaction" << jsonData;
-            QJsonParseError parseError;
-            const QJsonDocument jsonDoc = QJsonDocument::fromJson(jsonData, &parseError);
-            if (parseError.error == QJsonParseError::NoError) {
-                if (jsonDoc.isObject())
-                    jsonReceived(jsonDoc.object());
+    m_reader.reparse();
+
+    // Протокол:
+    // [
+    // {Type, Val}
+    // ...
+    // ]
+
+    while (m_reader.lastError() == QCborError::NoError) {
+        if (!m_started) {
+            // qDebug() << "not started yet";
+            if (!m_reader.isArray()) {
+                // qDebug() << "Error: must be an array";
+                break; // protocol error
             }
-        } else {
-            qDebug() << "partial transaction:" << jsonData;
-            break;
+            // qDebug() << "entering the main array";
+            m_reader.enterContainer();
+            m_started = true;
         }
+        else if (m_reader.containerDepth() == 1) {
+            // qDebug() << "we are at depth 1";
+            if (!m_reader.hasNext()) {
+                // qDebug() << "nothing to read, disconnecting...";
+                m_reader.leaveContainer();
+                disconnectFromHost();
+                return;
+            }
+
+            if (!m_reader.isMap() || !m_reader.isLengthKnown()) {
+                // qDebug() << "Error: must be a map";
+                break; // protocol error
+            }
+            // qDebug() << "we are at a map. Receiving message";
+            m_leftToRead = m_reader.length();
+            m_reader.enterContainer();
+            m_receivedData.clear();
+        }
+        else if (m_lastMessageType == Unknown) {
+            // qDebug() << "reading message type";
+            if (!m_reader.isInteger()) {
+                // qDebug() << "Error: message type must be an integer";
+                break; // protocol error
+            }
+            m_lastMessageType = Type(m_reader.toInteger());
+            // qDebug() << "message type"<<m_lastMessageType;
+            m_reader.next();
+        }
+        else {
+            // qDebug() << "reading payload";
+            switch (m_reader.type()) {
+                case QCborStreamReader::UnsignedInteger:
+                case QCborStreamReader::NegativeInteger: {
+                    m_receivedData.insert(m_lastMessageType, m_reader.toInteger());
+                    m_reader.next();
+                    break;
+                }
+                case QCborStreamReader::Float:
+                case QCborStreamReader::Double: {
+                    m_receivedData.insert(m_lastMessageType, m_reader.toDouble());
+                    m_reader.next();
+                    break;
+                }
+                case QCborStreamReader::ByteString: {
+                    m_receivedData.insert(m_lastMessageType, handleByteArray());
+                    break;
+                }
+                case QCborStreamReader::TextString: {
+                    m_receivedData.insert(m_lastMessageType, handleString());
+                    break;
+                }
+                case QCborStreamReader::Array: {
+                    m_receivedData.insert(m_lastMessageType, handleArray());
+                    break;
+                }
+                case QCborStreamReader::Map: {
+                    m_receivedData.insert(m_lastMessageType, handleMap());
+                    break;
+                }
+                case QCborStreamReader::SimpleType: { // treat as bool
+                    m_receivedData.insert(m_lastMessageType, m_reader.toBool());
+                    m_reader.next();
+                    break;
+                }
+                default: {
+                    qDebug() << "Error: unknown message payload";
+                    m_reader.next(); // skip unknown value
+                    break;
+                }
+            }
+            m_leftToRead--;
+            // qDebug() << "read so far:"<<m_receivedData;
+            // qDebug() << "left to read:"<<m_leftToRead;
+
+            if (m_leftToRead == 0) {
+                m_reader.leaveContainer();
+                dataReceived(m_receivedData);
+            }
+            m_lastMessageType = Unknown;
+        }
+    }
+
+    if (m_reader.lastError() != QCborError::NoError) {
+        qDebug() << QLatin1String("Invalid message:") << m_reader.lastError().toString();
     }
 }
 
@@ -271,4 +452,66 @@ void Client::onError(QAbstractSocket::SocketError error)
         Q_UNREACHABLE();
     }
     emit this->error(message);
+}
+
+QByteArray Client::handleByteArray()
+{
+    QByteArray result;
+    auto r = m_reader.readByteArray();
+    while (r.status == QCborStreamReader::Ok) {
+        result += r.data;
+        r = m_reader.readByteArray();
+    }
+
+    if (r.status == QCborStreamReader::Error)
+        result.clear();
+    return result;
+}
+
+QString Client::handleString()
+{
+    QString result;
+    auto r = m_reader.readString();
+    while (r.status == QCborStreamReader::Ok) {
+        result += r.data;
+        r = m_reader.readString();
+    }
+
+    if (r.status == QCborStreamReader::Error)
+        result.clear();
+
+    return result;
+}
+
+QVariantList Client::handleArray()
+{
+    QVariantList result;
+
+    if (m_reader.isLengthKnown())
+        result.reserve(m_reader.length());
+
+    m_reader.enterContainer();
+    while (m_reader.lastError() == QCborError::NoError && m_reader.hasNext())
+        result.append(handleString());
+
+    if (m_reader.lastError() == QCborError::NoError)
+        m_reader.leaveContainer();
+
+    return result;
+}
+
+QVariantMap Client::handleMap()
+{
+    QVariantMap result;
+
+    m_reader.enterContainer();
+    while (m_reader.lastError() == QCborError::NoError && m_reader.hasNext()) {
+        QString key = handleString();
+        result.insert(key, handleString());
+    }
+
+    if (m_reader.lastError() == QCborError::NoError)
+        m_reader.leaveContainer();
+
+    return result;
 }
