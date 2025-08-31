@@ -31,6 +31,8 @@ enum Type {
     Row, //int //номер ряда
     Column, //int //номер столбца
     CellType, //int // попал = 1 / не попал = 0 / убил = 2
+    Size, //int размер корабля
+    Orientation, //int ориентация корабля
 
     Unknown = 65535
 };

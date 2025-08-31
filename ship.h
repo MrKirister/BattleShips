@@ -1,12 +1,13 @@
 #ifndef SHIP_H
 #define SHIP_H
 
-#include <QGraphicsRectItem>
+#include <QGraphicsPixmapItem>
 #include <QObject>
 #include <QPoint>
 
 class Field;
-class Ship : public QObject, public QGraphicsRectItem
+
+class Ship : public QObject, public QGraphicsPixmapItem
 {
     Q_OBJECT
 
@@ -19,17 +20,23 @@ public:
 
     Qt::Orientation getOrientation() const;
     bool setOrientation(Qt::Orientation o, bool check = true);
+    void setOutline(bool outline);
 
     bool setPosition(int row, int col);
     QPoint getPosition() const; // позиция корабля в сетке row,col
     bool isPositioned() const;
+    bool positionValid() const;
+    bool intersects(Ship *ship) const;
 
     int checkHit(int row, int col);
 private:
+    static QString getFileName(int size, Qt::Orientation orientation);
     Qt::Orientation orientation = Qt::Horizontal;
     Field* field;
     QPoint distance;
     QVector<QPair<int, int>> hits;
+    bool outline = false;
+
     // QGraphicsItem interface
 protected:
     virtual void mousePressEvent(QGraphicsSceneMouseEvent *event) override;

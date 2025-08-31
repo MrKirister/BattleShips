@@ -28,9 +28,11 @@ public slots:
     void acceptGame(const QString &uid);
     void declineGame(const QString &uid);
     void readyPressed(bool isReady, const QString &uid);
-    void startGame(bool invitorFirst, const QString &uid);
+    void startGame(const QString &uid);
     void checkRivalCell(int row, int col, const QString &uid);
     void cellChecked(int val, const QString &uid, int row, int col);
+    void shipKilled(int row, int col, int size, Qt::Orientation o, const QString &uid);
+    void gameOver(const QString &uid);
 private slots:
     void onReadyRead();
     void onError(QAbstractSocket::SocketError error);
@@ -52,6 +54,8 @@ signals:
     void gameStarted(bool invitorFirst);
     void checkMyCell(int row, int col);
     void cellCheckedResult(int val, int row, int col);
+    void shipKilledResult(int row, int col, int size, Qt::Orientation o);
+    void gameOver();
     //void newGame(const QVector<Cell> &data, int size, int colorCount);
     //void newMove(const QVector<QPair<int, int>> &captured, int player);
     void dataReceived(const QMap<int, QVariant> &data);

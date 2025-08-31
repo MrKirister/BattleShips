@@ -6,12 +6,7 @@
 PlayersListModel::PlayersListModel(QObject *parent)
     : QAbstractTableModel{parent}
 {
-    // players.push_back({"Chris", Player::Status::online, 2});
-    // players.push_back({"Matthew", Player::Status::offline, 7});
-    // players.push_back({"Luke", Player::Status::inGame, 0});
-    // players.push_back({"John", Player::Status::online, 500});
-    f = qApp->font();
-    f.setPixelSize(32);
+
 }
 
 
@@ -23,7 +18,7 @@ int PlayersListModel::rowCount(const QModelIndex &parent) const
 int PlayersListModel::columnCount(const QModelIndex &parent) const
 {
     //nick, status, gamesplayed maybe
-    return 2;
+    return 1;
 }
 
 QVariant PlayersListModel::data(const QModelIndex &index, int role) const
@@ -31,30 +26,16 @@ QVariant PlayersListModel::data(const QModelIndex &index, int role) const
     if(!index.isValid()) return QVariant();
     auto row = index.row();
     auto column = index.column();
+    Q_ASSERT(column == 0);
 
     auto &player = players[row];
 
     switch(role) {
-        case Qt::DisplayRole:{
-                switch(column){
-                case 0: return player.name;
-                case 1: return player.totalPlayed;
-                default: break;
-            }
-            break;
-        }
-        case Qt::DecorationRole:{
-            if(column == 0) switch(player.status){
-                case Player::Status::offline: return QColor(0xaaaaaa);
-                case Player::Status::online: return QColor(0x1de11f);
-                case Player::Status::inGame: return QColor(0xd82d19);
-                }
-        }
-        case Qt::FontRole:{
-            return f;
-        }
+    case Qt::DisplayRole: {
+        return player.name;
     }
-        return QVariant();
+    }
+    return QVariant();
 }
 
 QVariant PlayersListModel::headerData(int section, Qt::Orientation orientation, int role) const
@@ -83,6 +64,7 @@ void PlayersListModel::userJoined(const QString &username, const QString &uid)
         a.uid = uid;
         QVariantMap users = settings.value("players").toMap();
         a.totalPlayed = users[uid].toPoint().x() + users[uid].toPoint().y();
+        a.won = users[uid].toPoint().x();
         players.push_back(a);
     }
     emit usersChanged(username, true);
@@ -113,6 +95,7 @@ void PlayersListModel::updatePlayers(const QStringList &list)
         a.status = Player::Status::online;
         a.uid = player.section('\n', 1, 1);
         a.totalPlayed = users[a.uid].toPoint().x() + users[a.uid].toPoint().y();
+        a.won = users[a.uid].toPoint().x();
         players.push_back(a);
     }
     endResetModel();

@@ -17,7 +17,8 @@ SOURCES += \
     playerfilter.cpp \
     playerslistmodel.cpp \
     ship.cpp \
-    widget.cpp
+    widget.cpp \
+    gameoverdialog.cpp
 
 HEADERS += \
     chat.h \
@@ -28,9 +29,13 @@ HEADERS += \
     playerfilter.h \
     playerslistmodel.h \
     ship.h \
-    widget.h
+    widget.h \
+    gameoverdialog.h
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
+
+RESOURCES += \
+    battleships.qrc

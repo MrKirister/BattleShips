@@ -12,6 +12,7 @@ struct Player{
     QString name;
     Status status = Status::offline;
     int totalPlayed = 0;
+    int won = 0;
     QString uid;
 };
 

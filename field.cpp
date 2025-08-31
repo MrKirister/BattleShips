@@ -27,8 +27,9 @@ protected:
     virtual void hoverMoveEvent(QGraphicsSceneHoverEvent *event) override
     {
         if (auto effect = dynamic_cast<QGraphicsOpacityEffect *>(graphicsEffect())) {
-            QRadialGradient alphaGradient(event->pos(), 325);
-            alphaGradient.setColorAt(0.25, QColor(0xE3E3F3));
+            QRadialGradient alphaGradient(event->pos(), 100);
+            alphaGradient.setColorAt(1, QColor("#007dcc"));
+            alphaGradient.setColorAt(0.25, QColor("#30007dcc"));
             alphaGradient.setColorAt(0.1, Qt::transparent);
             effect->setOpacityMask(alphaGradient);
         }
@@ -44,24 +45,31 @@ protected:
 
 
 Field::Field(bool palette, QWidget *parent)
-    :QGraphicsView(parent), paletteWidth{cellSize*4 + cellMargin*3 + fieldMargin*2}, havePalette{palette}
+    :QGraphicsView(parent),
+    paletteWidth{cellSize*4 + cellMargin*3 + fieldMargin*2},
+    totalWidth{10*cellSize + 9*cellMargin + 2*fieldMargin + (palette ? paletteWidth : 0)},
+    totalHeight{10*cellSize + 9*cellMargin + 2*fieldMargin},
+    havePalette{palette}
 {
     scene = new QGraphicsScene(parent);
-    if(palette){
-        scene->setSceneRect(QRect(1, 1, 700+paletteWidth-2, 700-2));
-        this->palette = scene->addRect(QRect(701, -1, paletteWidth+1, 702).toRectF(),
-                                       QPen("black") , QBrush(QColor(212, 211, 177)));
+    scene->setSceneRect(QRect(1, 1, totalWidth-2, totalHeight-2));
+    scene->addItem(grid());
+    if(palette) {
+        // this->palette = scene->addRect(QRectF(totalHeight+1, -1, paletteWidth+1, totalHeight+2),
+        //                                Qt::NoPen , QBrush(QColor(0x555555)));
     }
     else {
-        scene->setSceneRect(QRect(1, 1, 700-2, 700-2)); // ! TODO: учесть
-        scene->addItem(grid());
-
-        opacityRect = new OpacityRect(QRectF(1,1,698, 698), Qt::NoPen, QColor(0x518487)); // ! TODO: учесть
+        QRadialGradient g({0.0,0.0}, 1.5, {0.0, 0.0});
+        g.setColorAt(0, QColor("#007dcc"));
+        g.setColorAt(1, QColor("#0065a7"));
+        opacityRect = new OpacityRect(QRectF(1,1,totalWidth-2, totalWidth-2),
+                                      Qt::NoPen, g);
         scene->addItem(opacityRect);
     }
+
     this->setScene(scene);
-    this->setOptimizationFlag(QGraphicsView::DontAdjustForAntialiasing, true);
-    this->setRenderHint(QPainter::Antialiasing, false);
+    // this->setOptimizationFlag(QGraphicsView::DontAdjustForAntialiasing, true);
+    // this->setRenderHint(QPainter::Antialiasing, false);
 }
 
 void Field::createShips()
@@ -79,24 +87,25 @@ void Field::createShips()
     int i = 0;
     for(auto &el : ships) {
         scene->addItem(el);
-        el->setPos(702+fieldMargin, cellSize*i+(cellMargin*i)+ fieldMargin);
+        el->setPos(totalHeight+fieldMargin, cellSize*i+(cellMargin*i)+ fieldMargin);
         i++;
-        connect(el, &Ship::draggingBegin, this, [this](Ship *ship){ //TODO: учесть все connect
+        connect(el, &Ship::draggingBegin, this, [this](Ship *ship){
             delete outline;
             outline = nullptr;
             outline = new Ship(ship->size, this);
             outline->setOrientation(ship->getOrientation(), false);
+            outline->setOutline(true);
             startPos = ship->pos().toPoint();
             outline->setZValue(5);
-            outline->setPen(QColor(128, 128, 128));
-            outline->setBrush(Qt::NoBrush);
+            // outline->setPen(QColor(0xeeeeee));
+            // outline->setBrush(Qt::NoBrush);
             outline->setVisible(false);
             this->scene->addItem(outline);
             outline->setPos(startPos);
         });
         connect(el, &Ship::dragging, this, [this](const QPoint &pos){
             QPoint finalPos = getFinalPos(pos);
-            if (!valid(finalPos.y(), finalPos.x())) return;
+            // if (!valid(finalPos.y(), finalPos.x())) return;
             outline->setPosition(finalPos.y(), finalPos.x());
             outline->setVisible(true);
         });
@@ -119,30 +128,9 @@ void Field::createShips()
     }
 }
 
-// QJsonArray Field::getShips()
-// {
-//     QJsonArray a;
-//     for(auto ship: ships){
-//         QJsonObject o;
-//         o["orientation"] = ship->getOrientation();
-//         o["size"] = ship->size;
-//         o["position"] = QVariant::fromValue(ship->pos()).toJsonValue();
-//         a.push_back(o);
-//     }
-//     return a;
-// }
-
 void Field::disableField(bool isReady)
 {
     this->setDisabled(isReady);
-    if(isReady){
-        if(!disabledRect){
-            disabledRect = scene->addRect(QRect(0, 0, 700, 704), QPen(), QBrush(QColor(80, 80, 80, 150)));
-            disabledRect->setZValue(20);
-        }
-        disabledRect->show();
-    }
-    else disabledRect->hide();
 }
 
 void Field::hidePalette()
@@ -193,8 +181,15 @@ void Field::checkMyCell(int row, int col)
     int val;
     for(auto &ship : ships){
         val = ship->checkHit(row, col);
+        if(val == 2) {
+            shipKilled(ship);
+            emit shipKilled(ship->row, ship->col, ship->size, ship->getOrientation());
+            killedShips++;
+            if(killedShips == 10) emit gameOver();
+        }
         if(val != 0) break;
     }
+
     showHit(val, row, col);
     emit hit(val, row, col);
 }
@@ -226,40 +221,97 @@ void Field::showHit(int val, int row, int col)
 {
 
     if(val == 0){
-        auto a = scene->addEllipse(QRect(fieldMargin + col*(cellSize + cellMargin) + cellMargin,
-                                         fieldMargin + row*(cellSize + cellMargin) + cellMargin,
-                                         cellSize - 3, cellSize - 3));
-        a->setPen(QPen(Qt::black, 3));
+        auto l = scene->addPixmap(QPixmap(":/images/miss.png"));
+        l->setPos(fieldMargin + col*(cellSize + cellMargin),
+                  fieldMargin + row*(cellSize + cellMargin));
+        l->setZValue(30);
     }
     else {
-        auto l1 = scene->addLine(QLineF(fieldMargin + col*(cellSize + cellMargin), //TODO: сделать икс меньше
-                                        fieldMargin + row*(cellSize + cellMargin),
-                                        fieldMargin + (col+1)*(cellSize + cellMargin) - cellMargin,
-                                        fieldMargin + (row+1)*(cellSize + cellMargin) - cellMargin));
-        auto l2 = scene->addLine(QLineF(fieldMargin + col*(cellSize + cellMargin),
-                                      fieldMargin + (row+1)*(cellSize + cellMargin) - cellMargin,
-                                      fieldMargin + (col+1)*(cellSize + cellMargin) - cellMargin,
-                                        fieldMargin + row*(cellSize + cellMargin)));
-        l1->setZValue(30);
-        l2->setZValue(30);
-        l1->setPen(QPen(Qt::black, 3));
-        l2->setPen(QPen(Qt::black, 3));
-
+        auto l = scene->addPixmap(QPixmap(":/images/hit.png"));
+        l->setPos(fieldMargin + col*(cellSize + cellMargin),
+                  fieldMargin + row*(cellSize + cellMargin));
+        l->setZValue(30);
     }
-    //TODO: При убийстве коробля надо зачеркивать клетки около него
 }
 
-void Field::hideDisabledRect()
+void Field::showKilledShipArea(int row, int col, int size, Qt::Orientation o)
 {
-    delete disabledRect;
+    if(o == Qt::Horizontal){
+        if(row > 0 && col > 0){
+            showHit(0, row - 1, col - 1);
+        }
+        if(row < 9 && col > 0){
+            showHit(0, row + 1, col - 1);
+        }
+        if(row > 0 &&  col +  size <= 9){
+            showHit(0,  row - 1,  col +  size);
+        }
+        if(row < 9 &&  col +  size <= 9){
+            showHit(0,  row + 1,  col +  size);
+        }
+
+        if( col > 0){
+            showHit(0,  row,  col - 1);
+        }
+        if( col +  size <= 9){
+            showHit(0,  row,  col +  size);
+        }
+        for(int i =  col; i <  col+ size; i++){
+            if( row > 0){
+                showHit(0,  row - 1, i);
+            }
+            if( row < 9){
+                showHit(0,  row + 1, i);
+            }
+        }
+    }
+    else {
+        if( row > 0 &&  col > 0){
+            showHit(0,  row - 1,  col - 1);
+        }
+        if( row +  size <= 9 &&  col > 0){
+            showHit(0,  row +  size,  col - 1);
+        }
+        if( row > 0 &&  col < 9){
+            showHit(0,  row - 1,  col + 1);
+        }
+        if( row +  size <= 9 &&  col < 9){
+            showHit(0,  row +  size,  col + 1);
+        }
+
+
+        if( row > 0){
+            showHit(0, row - 1, col);
+        }
+        if( row +  size <= 9){
+            showHit(0,  row + size, col);
+        }
+        for(int i =  row; i < row+ size; i++){
+            if( col > 0){
+                showHit(0, i,  col - 1);
+            }
+            if( col < 9){
+                showHit(0, i,  col + 1);
+            }
+        }
+    }
 }
 
 bool Field::validFinalPos(Ship *exception) const
 {
-    for(auto &ship : ships){
+    // for(auto &ship : ships){
+    //     if(exception == ship) continue;
+    //     if(ship->pos().x() > totalHeight) continue;
+    //     if(ship->sceneBoundingRect().adjusted(-cellSize, -cellSize, cellSize, cellSize).intersects(outline->sceneBoundingRect())) return false;
+    // }
+    // return true;
+
+    // check the outline position
+    if (!outline->positionValid()) return false;
+
+    for(auto &ship : ships) {
         if(exception == ship) continue;
-        if(ship->pos().x() > 700) continue;
-        if(ship->sceneBoundingRect().adjusted(-cellSize, -cellSize, cellSize, cellSize).intersects(outline->sceneBoundingRect())) return false;
+        if (outline->intersects(ship)) return false;
     }
     return true;
 }
@@ -267,29 +319,31 @@ bool Field::validFinalPos(Ship *exception) const
 QGraphicsItem *Field::grid()
 {
     QGraphicsItemGroup *grid = new QGraphicsItemGroup();
+    QColor lineColor(qRgba(160,160,200,120));
 
     for (int i=0; i <= 10; ++i) {
         auto line = new QGraphicsLineItem(double(fieldMargin) - double(cellMargin)/2,
                                           -double(cellMargin)/2 + fieldMargin + i*(cellSize + cellMargin),
-                                          700.0 - double(fieldMargin) + double(cellMargin)/2,
+                                          totalHeight - double(fieldMargin) + double(cellMargin)/2,
                                           -double(cellMargin)/2 + fieldMargin + i*(cellSize + cellMargin),
                                           grid);
-        line->setPen(QPen(QColor(0xe3e3d3).lighter(100), cellMargin));
+        line->setPen(QPen(lineColor, cellMargin/2));
     }
     for (int i=0; i <= 10; ++i) {
         auto line = new QGraphicsLineItem(-double(cellMargin)/2 + fieldMargin + i*(cellSize + cellMargin),
                                           double(fieldMargin) - double(cellMargin)/2,
                                           -double(cellMargin)/2 + fieldMargin + i*(cellSize + cellMargin),
-                                          700.0 - double(fieldMargin) + double(cellMargin)/2,
+                                          totalHeight - double(fieldMargin) + double(cellMargin)/2,
                                           grid);
-        line->setPen(QPen(QColor(0xe3e3d3).lighter(100), cellMargin));
+        line->setPen(QPen(lineColor, cellMargin/2));
     }
     return grid;
 }
 
-//67*10 + 2*9 18 670+18=688 12/2
-//67 - клетка
-
+void Field::shipKilled(Ship *ship)
+{
+    showKilledShipArea(ship->row, ship->col, ship->size, ship->getOrientation());
+}
 
 void Field::mousePressEvent(QMouseEvent *event)
 {
