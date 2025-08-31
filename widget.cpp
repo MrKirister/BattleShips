@@ -759,7 +759,6 @@ void Widget::showInfo(InfoType type, const QString &message)
                                      .arg(color.blue())
                                      .arg(val.toInt()));
     });
-    connect(infoAnimation, &QPropertyAnimation::finished, infoLabel, &QLabel::hide);
     infoAnimation->start(QAbstractAnimation::KeepWhenStopped);
 }
 
